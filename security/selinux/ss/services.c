@@ -3787,6 +3787,7 @@ out:
 	return match;
 }
 
+#ifdef CONFIG_AUDIT
 static int aurule_avc_callback(u32 event)
 {
 	if (event == AVC_CALLBACK_RESET)
@@ -3805,6 +3806,7 @@ static int __init aurule_init(void)
 	return err;
 }
 __initcall(aurule_init);
+#endif
 
 #ifdef CONFIG_NETLABEL
 /**
