@@ -3401,12 +3401,25 @@ static int selinux_inode_getsecurity(struct inode *inode, const char *name, void
 	 * in-core context value, not a denial.
 	 */
 	isec = inode_security(inode);
-	if (has_cap_mac_admin(false))
-		error = security_sid_to_context_force(isec->sid, &context,
-						      &size);
-	else
-		error = security_sid_to_context(isec->sid,
-						&context, &size);
+	if (!alloc)
+		context = buf;
+	if (has_cap_mac_admin(false)) {
+		if (alloc) {
+			error = security_sid_to_context_force(isec->sid, &context,
+							      &size);
+		} else {
+			error = security_sid_to_context_force_stack(isec->sid, &context,
+							      &size);
+		}
+	} else {
+		if (alloc) {
+			error = security_sid_to_context(isec->sid,
+							&context, &size);
+		} else {
+			error = security_sid_to_context_stack(isec->sid,
+							&context, &size);
+		}
+	}
 	if (error)
 		return error;
 	error = size;
@@ -5071,7 +5084,7 @@ static int selinux_socket_getpeersec_stream(struct socket *sock, char __user *op
 	if (peer_sid == SECSID_NULL)
 		return -ENOPROTOOPT;
 
-	err = security_sid_to_context(peer_sid, &scontext,
+	err = security_sid_to_context_stack(peer_sid, &scontext,
 				      &scontext_len);
 	if (err)
 		return err;

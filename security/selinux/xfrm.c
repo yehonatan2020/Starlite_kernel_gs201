@@ -352,7 +352,7 @@ int selinux_xfrm_state_alloc_acquire(struct xfrm_state *x,
 	if (secid == 0)
 		return -EINVAL;
 
-	rc = security_sid_to_context(secid, &ctx_str,
+	rc = security_sid_to_context_stack(secid, &ctx_str,
 				     &str_len);
 	if (rc)
 		return rc;
