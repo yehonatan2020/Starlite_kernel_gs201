@@ -531,7 +531,9 @@ static void security_dump_masked_av(struct policydb *policydb,
 	}
 	audit_log_end(ab);
 out:
-	return;
+	/* release scontext/tcontext */
+	kfree(tcontext_name);
+	kfree(scontext_name);
 }
 #endif
 
