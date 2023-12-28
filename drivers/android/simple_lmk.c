@@ -5,6 +5,7 @@
 
 #define pr_fmt(fmt) "simple_lmk: " fmt
 
+#include <linux/delay.h>
 #include <linux/kthread.h>
 #include <linux/mm.h>
 #include <linux/moduleparam.h>
@@ -67,7 +68,7 @@ static struct victim_info victims[MAX_VICTIMS];
 static DECLARE_WAIT_QUEUE_HEAD(oom_waitq);
 static DECLARE_COMPLETION(reclaim_done);
 static int victims_to_kill;
-static atomic_t needs_reclaim = ATOMIC_INIT(0);
+static bool needs_reclaim;
 
 static int victim_size_cmp(const void *lhs_ptr, const void *rhs_ptr)
 {
@@ -293,10 +294,10 @@ void simple_lmk_mm_freed(struct mm_struct *mm)
 /* Initialize Simple LMK when lmkd in Android writes to the minfree parameter */
 static int simple_lmk_init_set(const char *val, const struct kernel_param *kp)
 {
-	static atomic_t init_done = ATOMIC_INIT(0);
+	static bool init_done;
 	struct task_struct *thread;
 
-	if (atomic_cmpxchg(&init_done, 0, 1))
+	if (cmpxchg(&init_done, false, true))
 		return 0;
 
 	thread = kthread_run(simple_lmk_reclaim_thread, NULL, "simple_lmkd");
