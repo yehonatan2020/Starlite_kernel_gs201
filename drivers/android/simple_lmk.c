@@ -100,6 +100,7 @@ static unsigned long find_victims(struct victim_info *varr, int *vindex,
 
 	for_each_process(tsk) {
 		struct task_struct *vtsk;
+		unsigned long tasksize;
 
 		/*
 		 * Search for tasks with the targeted importance (adj). Since
@@ -124,7 +125,7 @@ static unsigned long find_victims(struct victim_info *varr, int *vindex,
 		varr[*vindex].size = get_mm_rss(vtsk->mm);
 
 		/* Keep track of the number of pages that have been found */
-		pages_found += varr[*vindex].size;
+		pages_found += tasksize;
 
 		/* Make sure there's space left in the victim array */
 		if (++*vindex == vmaxlen)
@@ -250,8 +251,25 @@ static int simple_lmk_reclaim_thread(void *data)
 	sched_setscheduler_nocheck(current, SCHED_FIFO, &sched_max_rt_prio);
 
 	while (1) {
-		wait_event(oom_waitq, atomic_add_unless(&needs_reclaim, -1, 0));
-		scan_and_kill(MIN_FREE_PAGES);
+		bool should_stop;
+
+		wait_event(oom_waitq, (should_stop = kthread_should_stop()) ||
+				      READ_ONCE(needs_reclaim));
+
+		if (should_stop)
+			break;
+
+		/*
+		 * Kill a batch of processes and wait for their memory to be
+		 * freed. After their memory is freed, sleep for 20 ms to give
+		 * OOM'd allocations a chance to scavenge for the newly-freed
+		 * pages. Rinse and repeat while there are still OOM'd
+		 * allocations.
+		 */
+		do {
+			scan_and_kill(MIN_FREE_PAGES);
+			msleep(20);
+		} while (READ_ONCE(needs_reclaim));
 	}
 
 	return 0;
@@ -259,18 +277,16 @@ static int simple_lmk_reclaim_thread(void *data)
 
 void simple_lmk_decide_reclaim(int kswapd_priority)
 {
-	if (kswapd_priority == CONFIG_ANDROID_SIMPLE_LMK_AGGRESSION) {
-		int v, v1;
+	if (kswapd_priority != CONFIG_ANDROID_SIMPLE_LMK_AGGRESSION)
+		return;
 
-		for (v = 0;; v = v1) {
-			v1 = atomic_cmpxchg(&needs_reclaim, v, v + 1);
-			if (likely(v1 == v)) {
-				if (!v)
-					wake_up(&oom_waitq);
-				break;
-			}
-		}
-	}
+	if (!cmpxchg(&needs_reclaim, false, true))
+		wake_up(&oom_waitq);
+}
+
+void simple_lmk_stop_reclaim(void)
+{
+	WRITE_ONCE(needs_reclaim, false);
 }
 
 void simple_lmk_mm_freed(struct mm_struct *mm)
