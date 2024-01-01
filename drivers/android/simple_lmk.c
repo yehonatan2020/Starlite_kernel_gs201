@@ -146,11 +146,11 @@ static int process_victims(int vlen, unsigned long pages_needed)
 		/* The victim's mm lock is taken in find_victims; release it */
 		if (pages_found >= pages_needed) {
 			task_unlock(vtsk);
-			continue;
 		}
 
-		pages_found += victim->size;
-		nr_to_kill++;
+		} else {
+			pages_found += victim->size;
+			nr_to_kill++;
 	}
 
 	return nr_to_kill;
@@ -251,7 +251,7 @@ static int simple_lmk_reclaim_thread(void *data)
 
 	while (1) {
 		wait_event(oom_waitq, atomic_add_unless(&needs_reclaim, -1, 0));
-		wait_event(oom_waitq, atomic_read_acquire(&needs_reclaim));
+		wait_event(oom_waitq, atomic_read(&needs_reclaim));
 		scan_and_kill(MIN_FREE_PAGES);
 		atomic_set_release(&needs_reclaim, 0);
 	}
@@ -262,7 +262,7 @@ static int simple_lmk_reclaim_thread(void *data)
 void simple_lmk_decide_reclaim(int kswapd_priority)
 {
 	if (kswapd_priority == CONFIG_ANDROID_SIMPLE_LMK_AGGRESSION &&
-	    !atomic_cmpxchg(&needs_reclaim, 0, 1))
+	    !atomic_cmpxchg_acquire(&needs_reclaim, 0, 1))
 		wake_up(&oom_waitq);
 }
 
