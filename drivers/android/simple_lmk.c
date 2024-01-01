@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright (C) 2019-2020 Sultan Alsawaf <sultan@kerneltoast.com>.
+ * Copyright (C) 2019-2021 Sultan Alsawaf <sultan@kerneltoast.com>.
  */
 
 #define pr_fmt(fmt) "simple_lmk: " fmt
@@ -276,10 +276,13 @@ void simple_lmk_stop_reclaim(void)
 {
 	atomic_set(&needs_reclaim, 0);
 }
-
 void simple_lmk_mm_freed(struct mm_struct *mm)
 {
 	int i;
+
+	/* Nothing to do when reclaim is starting or ending */
+	if (!read_trylock(&mm_free_lock))
+		return;
 
 	for (i = 0; i < nr_victims; i++) {
 		if (victims[i].mm == mm) {
