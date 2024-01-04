@@ -218,7 +218,6 @@ static void scan_and_kill(void)
 		nr_to_kill = nr_found;
 	}
 
-	/*
 	/* Store the final number of victims for simple_lmk_mm_freed() */
 	write_lock(&mm_free_lock);
 	nr_victims = nr_to_kill;
