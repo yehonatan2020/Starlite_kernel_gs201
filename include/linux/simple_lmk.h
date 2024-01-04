@@ -11,7 +11,6 @@ struct mm_struct;
 void simple_lmk_decide_reclaim(int kswapd_priority);
 void simple_lmk_stop_reclaim(void);
 void simple_lmk_mm_freed(struct mm_struct *mm);
-void simple_lmk_trigger(void);
 #else
 static inline void simple_lmk_decide_reclaim(int kswapd_priority)
 {
@@ -20,9 +19,6 @@ static inline void simple_lmk_stop_reclaim(void)
 {
 }
 static inline void simple_lmk_mm_freed(struct mm_struct *mm)
-{
-}
-static inline void simple_lmk_trigger(void)
 {
 }
 #endif
