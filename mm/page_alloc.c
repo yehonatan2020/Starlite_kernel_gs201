@@ -83,6 +83,18 @@
 /* Free Page Internal flags: for internal, non-pcp variants of free_pages(). */
 typedef int __bitwise fpi_t;
 
+static inline struct per_cpu_pageset_ext *pcp_to_pageset_ext(struct per_cpu_pages *pcp)
+{
+	struct per_cpu_pageset *ps = container_of(pcp, struct per_cpu_pageset, pcp);
+
+	return container_of(ps, struct per_cpu_pageset_ext, pageset);
+}
+
+static inline struct per_cpu_pageset_ext *pageset_to_pageset_ext(struct per_cpu_pageset *ps)
+{
+	return container_of(ps, struct per_cpu_pageset_ext, pageset);
+}
+
 /* No special request */
 #define FPI_NONE		((__force fpi_t)0)
 
@@ -118,8 +130,6 @@ typedef int __bitwise fpi_t;
  * All memory allocated normally after boot gets poisoned as usual.
  */
 #define FPI_SKIP_KASAN_POISON	((__force fpi_t)BIT(2))
-
-atomic_long_t kswapd_waiters = ATOMIC_LONG_INIT(0);
 
 /* prevent >1 _updater_ of zone percpu pageset ->high and ->batch fields */
 static DEFINE_MUTEX(pcp_batch_high_lock);
@@ -157,13 +167,7 @@ DEFINE_PER_CPU(int, _numa_mem_);		/* Kernel "local memory" node */
 EXPORT_PER_CPU_SYMBOL(_numa_mem_);
 #endif
 
-/* work_structs for global per-cpu drains */
-struct pcpu_drain {
-	struct zone *zone;
-	struct work_struct work;
-};
 static DEFINE_MUTEX(pcpu_drain_mutex);
-static DEFINE_PER_CPU(struct pcpu_drain, pcpu_drain);
 
 #ifdef CONFIG_GCC_PLUGIN_LATENT_ENTROPY
 volatile unsigned long latent_entropy __latent_entropy;
@@ -2456,12 +2460,6 @@ static void prep_new_page(struct page *page, unsigned int order, gfp_t gfp_flags
 {
 	post_alloc_hook(page, order, gfp_flags);
 
-	if (IS_ENABLED(CONFIG_PAGE_SANITIZE_VERIFY) && want_init_on_free()) {
-		int i;
-		for (i = 0; i < (1 << order); i++)
-			verify_zero_highpage(page + i);
-	}
-
 	if (order && (gfp_flags & __GFP_COMP))
 		prep_compound_page(page, order);
 
@@ -3136,9 +3134,6 @@ static struct list_head *get_populated_pcp_list(struct zone *zone,
  * Called from the vmstat counter updater to drain pagesets of this
  * currently executing processor on remote nodes after they have
  * expired.
- *
- * Note that this function must be called with the thread pinned to
- * a single processor.
  */
 void drain_zone_pages(struct zone *zone, struct per_cpu_pages *pcp)
 {
@@ -3148,50 +3143,45 @@ void drain_zone_pages(struct zone *zone, struct per_cpu_pages *pcp)
 	to_drain = min(pcp->count, batch);
 	if (to_drain > 0) {
 		unsigned long flags;
+		struct per_cpu_pageset_ext *ps_ext = pcp_to_pageset_ext(pcp);
 
 		/*
 		 * free_pcppages_bulk expects IRQs disabled for zone->lock
 		 * so even though pcp->lock is not intended to be IRQ-safe,
 		 * it's needed in this context.
 		 */
-		spin_lock_irqsave(&pcp->lock, flags);
+		spin_lock_irqsave(&ps_ext->lock, flags);
 		free_pcppages_bulk(zone, to_drain, pcp);
-		spin_unlock_irqrestore(&pcp->lock, flags);
+		spin_unlock_irqrestore(&ps_ext->lock, flags);
 	}
 }
 #endif
 
 /*
  * Drain pcplists of the indicated processor and zone.
- *
- * The processor must either be the current processor and the
- * thread pinned to the current processor or a processor that
- * is not online.
  */
 static void drain_pages_zone(unsigned int cpu, struct zone *zone)
 {
 	struct per_cpu_pageset *pset;
+	struct per_cpu_pageset_ext *ps_ext;
 	struct per_cpu_pages *pcp;
 
 	pset = per_cpu_ptr(zone->pageset, cpu);
+	ps_ext = pageset_to_pageset_ext(pset);
 
 	pcp = &pset->pcp;
 	if (pcp->count) {
 		unsigned long flags;
 
 		/* See drain_zone_pages on why this is disabling IRQs */
-		spin_lock_irqsave(&pcp->lock, flags);
+		spin_lock_irqsave(&ps_ext->lock, flags);
 		free_pcppages_bulk(zone, pcp->count, pcp);
-		spin_unlock_irqrestore(&pcp->lock, flags);
+		spin_unlock_irqrestore(&ps_ext->lock, flags);
 	}
 }
 
 /*
  * Drain pcplists of all zones on the indicated processor.
- *
- * The processor must either be the current processor and the
- * thread pinned to the current processor or a processor that
- * is not online.
  */
 static void drain_pages(unsigned int cpu)
 {
@@ -3204,9 +3194,6 @@ static void drain_pages(unsigned int cpu)
 
 /*
  * Spill all of this CPU's per-cpu pages back into the buddy allocator.
- *
- * The CPU has to be pinned. When zone parameter is non-NULL, spill just
- * the single zone's pages.
  */
 void drain_local_pages(struct zone *zone)
 {
@@ -3218,30 +3205,10 @@ void drain_local_pages(struct zone *zone)
 		drain_pages(cpu);
 }
 
-static void drain_local_pages_wq(struct work_struct *work)
-{
-	struct pcpu_drain *drain;
-
-	drain = container_of(work, struct pcpu_drain, work);
-
-	/*
-	 * drain_all_pages doesn't use proper cpu hotplug protection so
-	 * we can race with cpu offline when the WQ can move this from
-	 * a cpu pinned worker to an unbound one. We can operate on a different
-	 * cpu which is allright but we also have to make sure to not move to
-	 * a different one.
-	 */
-	preempt_disable();
-	drain_local_pages(drain->zone);
-	preempt_enable();
-}
-
 /*
  * Spill all the per-cpu pages from all CPUs back into the buddy allocator.
  *
  * When zone parameter is non-NULL, spill just the single zone's pages.
- *
- * Note that this can be extremely slow as the draining happens in a workqueue.
  */
 void drain_all_pages(struct zone *zone)
 {
@@ -3252,13 +3219,6 @@ void drain_all_pages(struct zone *zone)
 	 * direct reclaim path for CONFIG_CPUMASK_OFFSTACK=y
 	 */
 	static cpumask_t cpus_with_pcps;
-
-	/*
-	 * Make sure nobody triggers this path before mm_percpu_wq is fully
-	 * initialized.
-	 */
-	if (WARN_ON_ONCE(!mm_percpu_wq))
-		return;
 
 	/*
 	 * Do not drain if one is already in progress unless it's specific to
@@ -3303,14 +3263,12 @@ void drain_all_pages(struct zone *zone)
 	}
 
 	for_each_cpu(cpu, &cpus_with_pcps) {
-		struct pcpu_drain *drain = per_cpu_ptr(&pcpu_drain, cpu);
-
-		drain->zone = zone;
-		INIT_WORK(&drain->work, drain_local_pages_wq);
-		queue_work_on(cpu, mm_percpu_wq, &drain->work);
+		if (zone) {
+			drain_pages_zone(cpu, zone);
+		} else {
+			drain_pages(cpu);
+		}
 	}
-	for_each_cpu(cpu, &cpus_with_pcps)
-		flush_work(&per_cpu_ptr(&pcpu_drain, cpu)->work);
 
 	mutex_unlock(&pcpu_drain_mutex);
 }
@@ -3388,15 +3346,17 @@ static bool free_unref_page_commit(struct page *page, int migratetype,
 {
 	struct zone *zone = page_zone(page);
 	struct per_cpu_pages *pcp;
+	struct per_cpu_pageset_ext *ps_ext;
 	unsigned long __maybe_unused UP_flags;
 
 	__count_vm_event(PGFREE);
 	pcp = &this_cpu_ptr(zone->pageset)->pcp;
+	ps_ext = pcp_to_pageset_ext(pcp);
 
 	if (!locked) {
 		/* Protect against a parallel drain. */
 		pcp_trylock_prepare(UP_flags);
-		if (!spin_trylock(&pcp->lock)) {
+		if (!spin_trylock(&ps_ext->lock)) {
 			pcp_trylock_finish(UP_flags);
 			return false;
 		}
@@ -3410,7 +3370,7 @@ static bool free_unref_page_commit(struct page *page, int migratetype,
 	}
 
 	if (!locked) {
-		spin_unlock(&pcp->lock);
+		spin_unlock(&ps_ext->lock);
 		pcp_trylock_finish(UP_flags);
 	}
 
@@ -3462,6 +3422,7 @@ void free_unref_page(struct page *page)
 void free_unref_page_list(struct list_head *list)
 {
 	struct page *page, *next;
+	struct per_cpu_pageset_ext *ps_ext;
 	struct per_cpu_pages *pcp;
 	struct zone *locked_zone;
 	unsigned long flags;
@@ -3519,25 +3480,29 @@ void free_unref_page_list(struct list_head *list)
 	page = lru_to_page(list);
 	locked_zone = page_zone(page);
 	pcp = &this_cpu_ptr(locked_zone->pageset)->pcp;
-	spin_lock(&pcp->lock);
+	ps_ext = pcp_to_pageset_ext(pcp);
+	spin_lock(&ps_ext->lock);
 
 	list_for_each_entry_safe(page, next, list, lru) {
 		struct zone *zone = page_zone(page);
 
 		/* Different zone, different pcp lock. */
 		if (zone != locked_zone) {
-			spin_unlock(&pcp->lock);
+			spin_unlock(&ps_ext->lock);
 			locked_zone = zone;
 			pcp = &this_cpu_ptr(zone->pageset)->pcp;
-			spin_lock(&pcp->lock);
+			ps_ext = pcp_to_pageset_ext(pcp);
+			spin_lock(&ps_ext->lock);
 		}
 
 		migratetype = get_pcppage_migratetype(page);
 		trace_mm_page_free_batched(page);
 
 		/*
-		 * TODO: Always false at the moment due to local_lock_irqsave
-		 *	 and is preparation for converting to local_lock.
+		 * If there is a parallel drain in progress, free to the buddy
+		 * allocator directly. This is expensive as the zone lock will
+		 * be acquired multiple times but if a drain is in progress
+		 * then an expensive operation is already taking place.
 		 */
 		if (!free_unref_page_commit(page, migratetype, true))
 			free_one_page(page_zone(page), page, page_to_pfn(page),
@@ -3548,15 +3513,16 @@ void free_unref_page_list(struct list_head *list)
 		 * a large list of pages to free.
 		 */
 		if (++batch_count == SWAP_CLUSTER_MAX) {
-			spin_unlock(&pcp->lock);
+			spin_unlock(&ps_ext->lock);
 			local_irq_restore(flags);
 			batch_count = 0;
 			local_irq_save(flags);
 			pcp = &this_cpu_ptr(locked_zone->pageset)->pcp;
-			spin_lock(&pcp->lock);
+			ps_ext = pcp_to_pageset_ext(pcp);
+			spin_lock(&ps_ext->lock);
 		}
 	}
-	spin_unlock(&pcp->lock);
+	spin_unlock(&ps_ext->lock);
 	local_irq_restore(flags);
 }
 
@@ -3734,6 +3700,7 @@ static struct page *__rmqueue_pcplist(struct zone *zone, int migratetype,
 	struct page *page = NULL;
 	unsigned long __maybe_unused UP_flags;
 	struct list_head *list = NULL;
+	struct per_cpu_pageset_ext *ps_ext = pcp_to_pageset_ext(pcp);
 
 	/*
 	 * spin_trylock is not necessary right now due to due to
@@ -3745,7 +3712,7 @@ static struct page *__rmqueue_pcplist(struct zone *zone, int migratetype,
 	 */
 	if (unlikely(!locked)) {
 		pcp_trylock_prepare(UP_flags);
-		if (!spin_trylock(&pcp->lock)) {
+		if (!spin_trylock(&ps_ext->lock)) {
 			pcp_trylock_finish(UP_flags);
 			return NULL;
 		}
@@ -3780,7 +3747,7 @@ static struct page *__rmqueue_pcplist(struct zone *zone, int migratetype,
 
 out:
 	if (!locked) {
-		spin_unlock(&pcp->lock);
+		spin_unlock(&ps_ext->lock);
 		pcp_trylock_finish(UP_flags);
 	}
 
@@ -5031,8 +4998,6 @@ __alloc_pages_slowpath(gfp_t gfp_mask, unsigned int order,
 	unsigned int zonelist_iter_cookie;
 	int reserve_flags;
 	unsigned long alloc_start = jiffies;
-	bool woke_kswapd = false;
-	bool used_vmpressure = false;
 	/*
 	 * We also sanity check to catch abuse of atomic reserves being used by
 	 * callers that are not in atomic context.
@@ -5066,15 +5031,8 @@ restart:
 	if (!ac->preferred_zoneref->zone)
 		goto nopage;
 
-	if (alloc_flags & ALLOC_KSWAPD) {
-		if (!woke_kswapd) {
-			atomic_long_inc(&kswapd_waiters);
-			woke_kswapd = true;
-		}
-		if (!used_vmpressure)
-			used_vmpressure = vmpressure_inc_users(order);
+	if (alloc_flags & ALLOC_KSWAPD)
 		wake_all_kswapds(order, gfp_mask, ac);
-	}
 
 	/*
 	 * The adjusted alloc_flags might result in immediate success, so try
@@ -5179,8 +5137,6 @@ retry:
 		goto got_pg;
 
 	/* Try direct reclaim and then allocating */
-	if (!used_vmpressure)
-		used_vmpressure = vmpressure_inc_users(order);
 	page = __alloc_pages_direct_reclaim(gfp_mask, order, alloc_flags, ac,
 							&did_some_progress);
 	if (page)
@@ -5236,10 +5192,8 @@ retry:
 	/* Avoid allocations with no watermarks from looping endlessly */
 	if (tsk_is_oom_victim(current) &&
 	    (alloc_flags & ALLOC_OOM ||
-	     (gfp_mask & __GFP_NOMEMALLOC))) {
-		gfp_mask |= __GFP_NOWARN;
+	     (gfp_mask & __GFP_NOMEMALLOC)))
 		goto nopage;
-	}
 
 	/* Retry as long as the OOM killer is making progress */
 	if (did_some_progress) {
@@ -5301,14 +5255,10 @@ fail:
 		alloc_flags, ac->migratetype, &page);
 	if (page)
 		goto got_pg;
+
+	warn_alloc(gfp_mask, ac->nodemask,
+			"page allocation failure: order:%u", order);
 got_pg:
-	if (woke_kswapd)
-		atomic_long_dec(&kswapd_waiters);
-	if (used_vmpressure)
-		vmpressure_dec_users();
-	if (!page)
-		warn_alloc(gfp_mask, ac->nodemask,
-				"page allocation failure: order:%u", order);
 	trace_android_vh_alloc_pages_slowpath(gfp_mask, order, alloc_start);
 	return page;
 }
@@ -6369,7 +6319,7 @@ static void build_zonelists(pg_data_t *pgdat)
  * Other parts of the kernel may not check if the zone is available.
  */
 static void setup_pageset(struct per_cpu_pageset *p, unsigned long batch);
-static DEFINE_PER_CPU(struct per_cpu_pageset, boot_pageset);
+static DEFINE_PER_CPU(struct per_cpu_pageset_ext, boot_pageset);
 static DEFINE_PER_CPU(struct per_cpu_nodestat, boot_nodestats);
 
 static void __build_all_zonelists(void *data)
@@ -6435,7 +6385,7 @@ build_all_zonelists_init(void)
 	 * (a chicken-egg dilemma).
 	 */
 	for_each_possible_cpu(cpu)
-		setup_pageset(&per_cpu(boot_pageset, cpu), 0);
+		setup_pageset(&per_cpu(boot_pageset, cpu).pageset, 0);
 
 	mminit_verify_zonelist();
 	cpuset_init_current_mems_allowed();
@@ -6854,12 +6804,14 @@ static void pageset_set_batch(struct per_cpu_pageset *p, unsigned long batch)
 static void pageset_init(struct per_cpu_pageset *p)
 {
 	struct per_cpu_pages *pcp;
+	struct per_cpu_pageset_ext *ps_ext;
 	int migratetype;
 
 	memset(p, 0, sizeof(*p));
 
+	ps_ext = pageset_to_pageset_ext(p);
 	pcp = &p->pcp;
-	spin_lock_init(&pcp->lock);
+	spin_lock_init(&ps_ext->lock);
 	for (migratetype = 0; migratetype < MIGRATE_PCPTYPES; migratetype++)
 		INIT_LIST_HEAD(&pcp->lists[migratetype]);
 }
@@ -6906,7 +6858,10 @@ static void __meminit zone_pageset_init(struct zone *zone, int cpu)
 void __meminit setup_zone_pageset(struct zone *zone)
 {
 	int cpu;
-	zone->pageset = alloc_percpu(struct per_cpu_pageset);
+	struct per_cpu_pageset_ext *ps_ext;
+
+	ps_ext = alloc_percpu(struct per_cpu_pageset_ext);
+	zone->pageset = &ps_ext->pageset;
 	for_each_possible_cpu(cpu)
 		zone_pageset_init(zone, cpu);
 }
@@ -6932,7 +6887,7 @@ void __init setup_per_cpu_pageset(void)
 	 * the nodes these zones are associated with.
 	 */
 	for_each_possible_cpu(cpu) {
-		struct per_cpu_pageset *pcp = &per_cpu(boot_pageset, cpu);
+		struct per_cpu_pageset *pcp = &per_cpu(boot_pageset, cpu).pageset;
 		memset(pcp->vm_numa_stat_diff, 0,
 		       sizeof(pcp->vm_numa_stat_diff));
 	}
@@ -6950,7 +6905,7 @@ static __meminit void zone_pcp_init(struct zone *zone)
 	 * relies on the ability of the linker to provide the
 	 * offset of a (static) per cpu variable into the per cpu area.
 	 */
-	zone->pageset = &boot_pageset;
+	zone->pageset = &boot_pageset.pageset;
 
 	if (populated_zone(zone))
 		printk(KERN_DEBUG "  %s zone: %lu pages, LIFO batch:%u\n",
@@ -9298,13 +9253,13 @@ void zone_pcp_reset(struct zone *zone)
 
 	/* avoid races with drain_pages()  */
 	local_irq_save(flags);
-	if (zone->pageset != &boot_pageset) {
+	if (zone->pageset != &boot_pageset.pageset) {
 		for_each_online_cpu(cpu) {
 			pset = per_cpu_ptr(zone->pageset, cpu);
 			drain_zonestat(zone, pset);
 		}
 		free_percpu(zone->pageset);
-		zone->pageset = &boot_pageset;
+		zone->pageset = &boot_pageset.pageset;
 	}
 	local_irq_restore(flags);
 }

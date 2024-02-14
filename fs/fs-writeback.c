@@ -1893,7 +1893,8 @@ static long wb_writeback(struct bdi_writeback *wb,
 		 * safe.
 		 */
 		if (work->for_kupdate) {
-			dirtied_before = jiffies - (30 * HZ);
+			dirtied_before = jiffies -
+				msecs_to_jiffies(dirty_expire_interval * 10);
 		} else if (work->for_background)
 			dirtied_before = jiffies;
 
@@ -2183,12 +2184,12 @@ static void wakeup_dirtytime_writeback(struct work_struct *w)
 				wb_wakeup(wb);
 	}
 	rcu_read_unlock();
-	queue_delayed_work(system_power_efficient_wq, &dirtytime_work, dirtytime_expire_interval * HZ);
+	schedule_delayed_work(&dirtytime_work, dirtytime_expire_interval * HZ);
 }
 
 static int __init start_dirtytime_writeback(void)
 {
-	queue_delayed_work(system_power_efficient_wq, &dirtytime_work, dirtytime_expire_interval * HZ);
+	schedule_delayed_work(&dirtytime_work, dirtytime_expire_interval * HZ);
 	return 0;
 }
 __initcall(start_dirtytime_writeback);

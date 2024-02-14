@@ -1,13 +1,9 @@
 # SPDX-License-Identifier: GPL-2.0
 VERSION = 5
 PATCHLEVEL = 10
-SUBLEVEL = 193
+SUBLEVEL = 177
 EXTRAVERSION =
 NAME = Dare mighty things
-
-ifeq ($(MAKECMDGOALS),)
-MAKECMDGOALS := Image.lz4 google/dtbo.img
-endif
 
 # *DOCUMENTATION*
 # To see a list of typical targets execute "make help"
@@ -130,8 +126,6 @@ export quiet Q KBUILD_VERBOSE
 #
 # The O= assignment takes precedence over the KBUILD_OUTPUT environment
 # variable.
-
-KBUILD_OUTPUT := out
 
 # Do we want to change the working directory?
 ifeq ("$(origin O)", "command line")
@@ -394,8 +388,7 @@ include $(srctree)/scripts/subarch.include
 # Alternatively CROSS_COMPILE can be set in the environment.
 # Default value for CROSS_COMPILE is not to prefix executables
 # Note: Some architectures assign CROSS_COMPILE in their arch/*/Makefile
-ARCH		:= arm64
-CROSS_COMPILE	?= aarch64-linux-gnu-
+ARCH		?= $(SUBARCH)
 
 # Architecture as present in compile.h
 UTS_MACHINE 	:= $(ARCH)
@@ -444,7 +437,7 @@ HOSTCXX	= g++
 endif
 
 KBUILD_USERHOSTCFLAGS := -Wall -Wmissing-prototypes -Wstrict-prototypes \
-			 -O2 -fomit-frame-pointer -std=gnu89 -pipe
+			 -O2 -fomit-frame-pointer -std=gnu89
 KBUILD_USERCFLAGS  := $(KBUILD_USERHOSTCFLAGS) $(USERCFLAGS)
 KBUILD_USERLDFLAGS := $(USERLDFLAGS)
 
@@ -501,7 +494,7 @@ CHECKFLAGS     := -D__linux__ -Dlinux -D__STDC__ -Dunix -D__unix__ \
 NOSTDINC_FLAGS :=
 CFLAGS_MODULE   =
 AFLAGS_MODULE   =
-LDFLAGS_MODULE  = --strip-debug
+LDFLAGS_MODULE  =
 CFLAGS_KERNEL	=
 AFLAGS_KERNEL	=
 LDFLAGS_vmlinux =
@@ -528,12 +521,7 @@ KBUILD_CFLAGS   := -Wall -Wundef -Werror=strict-prototypes -Wno-trigraphs \
 		   -fno-strict-aliasing -fno-common -fshort-wchar -fno-PIE \
 		   -Werror=implicit-function-declaration -Werror=implicit-int \
 		   -Werror=return-type -Wno-format-security \
-		   -std=gnu89 \
-		   -mcpu=cortex-a55 -fdiagnostics-color=always -pipe \
-		   -Wno-void-pointer-to-enum-cast -Wno-misleading-indentation -Wno-unused-function -Wno-bool-operation \
-		   -Wno-unsequenced -Wno-void-pointer-to-int-cast -Wno-unused-variable -Wno-pointer-to-int-cast -Wno-pointer-to-enum-cast \
-		   -Wno-fortify-source -Wno-strlcpy-strlcat-size -Wno-unused-result -Wno-deprecated -Wno-deprecated-declarations -Wformat=0
-
+		   -std=gnu89
 KBUILD_CPPFLAGS := -D__KERNEL__
 KBUILD_AFLAGS_KERNEL :=
 KBUILD_CFLAGS_KERNEL :=
@@ -672,18 +660,12 @@ ifdef need-config
 include include/config/auto.conf
 endif
 
-ifdef CONFIG_INTEGRATE_MODULES
-KBUILD_CFLAGS_MODULE += -include $(srctree)/include/linux/integrated_module.h
-endif
-
 ifeq ($(KBUILD_EXTMOD),)
 # Objects we will link into vmlinux / subdirs we need to visit
 core-y		:= init/ usr/
 drivers-y	:= drivers/ sound/
 drivers-$(CONFIG_SAMPLES) += samples/
 drivers-y	+= net/ virt/
-drivers-y	+= google-devices/
-drivers-y	+= google-modules/
 libs-y		:= lib/
 endif # KBUILD_EXTMOD
 
@@ -951,18 +933,18 @@ endif
 
 ifdef CONFIG_LTO_CLANG
 ifdef CONFIG_LTO_CLANG_THIN
-CC_FLAGS_LTO	:= -flto=thin -fsplit-lto-unit -fvisibility=default
+CC_FLAGS_LTO	:= -flto=thin -fsplit-lto-unit
 KBUILD_LDFLAGS	+= --thinlto-cache-dir=$(extmod-prefix).thinlto-cache
 else
-CC_FLAGS_LTO	:= -flto -fvisibility=hidden
+CC_FLAGS_LTO	:= -flto
 endif
 
-# ifeq ($(SRCARCH),x86)
-# # TODO(b/182572011): Revert workaround for compiler / linker bug.
-# CC_FLAGS_LTO	+= -fvisibility=hidden
-# else
-# CC_FLAGS_LTO	+= -fvisibility=default
-# endif
+ifeq ($(SRCARCH),x86)
+# TODO(b/182572011): Revert workaround for compiler / linker bug.
+CC_FLAGS_LTO	+= -fvisibility=hidden
+else
+CC_FLAGS_LTO	+= -fvisibility=default
+endif
 
 # Limit inlining across translation units to reduce binary size
 KBUILD_LDFLAGS += -mllvm -import-instr-limit=5
@@ -1465,7 +1447,7 @@ ifneq ($(dtstree),)
 $(filter %/dtbo.img, $(MAKECMDGOALS)): %/dtbo.img: | $(filter %.dtbo %.dtb dtbs,$(MAKECMDGOALS))
 $(filter %.dtbo, $(MAKECMDGOALS)): %.dtbo: | $(filter %.dtb dtbs,$(MAKECMDGOALS))
 
-%.dtb %/dtbo.img %.dtbo: include/config/kernel.release scripts_dtc scripts_mkdtimg
+%.dtb %/dtbo.img %.dtbo: include/config/kernel.release scripts_dtc
 	$(Q)$(MAKE) $(build)=$(dtstree)/$(@D) $(dtstree)/$@
 
 PHONY += dtbs dtbs_install dtbs_check
@@ -1488,12 +1470,9 @@ endif
 
 endif
 
-PHONY += scripts_dtc scripts_mkdtimg
+PHONY += scripts_dtc
 scripts_dtc: scripts_basic
-	$(Q)$(MAKE) $(build)=scripts/dtc-aosp
-
-scripts_mkdtimg: scripts_dtc
-	$(Q)$(MAKE) $(build)=scripts/libufdt
+	$(Q)$(MAKE) $(build)=scripts/dtc
 
 ifneq ($(filter dt_binding_check, $(MAKECMDGOALS)),)
 export CHECK_DT_BINDING=y

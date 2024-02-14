@@ -80,7 +80,6 @@ config ARM64
 	select ARCH_SUPPORTS_ATOMIC_RMW
 	select ARCH_SUPPORTS_INT128 if CC_HAS_INT128 && (GCC_VERSION >= 50000 || CC_IS_CLANG)
 	select ARCH_SUPPORTS_NUMA_BALANCING
-	select ARCH_SUPPORTS_RT if HAVE_POSIX_CPU_TIMERS_TASK_WORK
 	select ARCH_WANT_COMPAT_IPC_PARSE_VERSION if COMPAT
 	select ARCH_WANT_DEFAULT_BPF_JIT
 	select ARCH_WANT_DEFAULT_TOPDOWN_MMAP_LAYOUT
@@ -112,7 +111,6 @@ config ARM64
 	select GENERIC_CPU_AUTOPROBE
 	select GENERIC_CPU_VULNERABILITIES
 	select GENERIC_EARLY_IOREMAP
-	select GENERIC_FIND_FIRST_BIT
 	select GENERIC_IDLE_POLL_SETUP
 	select GENERIC_IRQ_IPI
 	select ARCH_WANTS_IRQ_RAW
@@ -209,7 +207,6 @@ config ARM64
 	select PCI_DOMAINS_GENERIC if PCI
 	select PCI_ECAM if (ACPI && PCI)
 	select PCI_SYSCALL if PCI
-	select HAVE_POSIX_CPU_TIMERS_TASK_WORK if !KVM
 	select POWER_RESET
 	select POWER_SUPPLY
 	select SET_FS
@@ -1066,27 +1063,6 @@ config NR_CPUS
 	int "Maximum number of CPUs (2-4096)"
 	range 2 4096
 	default "256"
-
-config LITTLE_CPU_MASK
-	int "Bitmask of available LITTLE CPUs"
-	help
-	  This is a bitmask specifying which of the CPUs are LITTLE in a
-	  heterogeneous system. Use 0 if you are unsure, which just results in
-	  this storing the bitmask of all available CPUs.
-
-config BIG_CPU_MASK
-	int "Bitmask of available big CPUs"
-	help
-	  This is a bitmask specifying which of the CPUs are big in a
-	  heterogeneous system. Use 0 if you are unsure, which just results in
-	  this storing the bitmask of all available CPUs.
-
-config PRIME_CPU_MASK
-	int "Bitmask of available prime CPUs"
-	help
-	  This is a bitmask specifying which of the CPUs are prime in a
-	  heterogeneous system. Use 0 if you are unsure, which just results in
-	  this storing the bitmask of all available CPUs.
 
 config HOTPLUG_CPU
 	bool "Support for hot-pluggable CPUs"

@@ -107,10 +107,6 @@
 #if defined(CONFIG_SYSCTL)
 
 /* External variables not in a header file. */
-#if IS_ENABLED(CONFIG_USB)
-int deny_new_usb __read_mostly = 0;
-EXPORT_SYMBOL(deny_new_usb);
-#endif
 
 /* Constants used for minimum and  maximum */
 #ifdef CONFIG_LOCKUP_DETECTOR
@@ -1838,6 +1834,15 @@ static struct ctl_table kern_table[] = {
 		.mode		= 0644,
 		.proc_handler	= sched_rr_handler,
 	},
+#ifdef CONFIG_SMP
+	{
+		.procname	= "sched_pelt_multiplier",
+		.data		= &sysctl_sched_pelt_multiplier,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= sched_pelt_multiplier,
+	},
+#endif
 #ifdef CONFIG_UCLAMP_TASK
 	{
 		.procname	= "sched_util_clamp_min",
@@ -2286,17 +2291,6 @@ static struct ctl_table kern_table[] = {
 		.proc_handler	= proc_dointvec_minmax_sysadmin,
 		.extra1		= SYSCTL_ZERO,
 		.extra2		= &two,
-	},
-#endif
-#if IS_ENABLED(CONFIG_USB)
-	{
-		.procname	= "deny_new_usb",
-		.data		= &deny_new_usb,
-		.maxlen		= sizeof(int),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec_minmax_sysadmin,
-		.extra1		= SYSCTL_ZERO,
-		.extra2		= SYSCTL_ONE,
 	},
 #endif
 	{

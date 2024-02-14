@@ -424,7 +424,6 @@ static inline int avc_xperms_audit(struct selinux_state *state,
 				   u8 perm, int result,
 				   struct common_audit_data *ad)
 {
-#ifdef CONFIG_AUDIT
 	u32 audited, denied;
 
 	audited = avc_xperms_audit_required(
@@ -433,9 +432,6 @@ static inline int avc_xperms_audit(struct selinux_state *state,
 		return 0;
 	return slow_avc_audit(state, ssid, tsid, tclass, requested,
 			audited, denied, result, ad);
-#else
-	return 0;
-#endif
 }
 
 static void avc_node_free(struct rcu_head *rhead)
@@ -667,7 +663,6 @@ found:
 	return node;
 }
 
-#ifdef CONFIG_AUDIT
 /**
  * avc_audit_pre_callback - SELinux specific information
  * will be called by generic audit code
@@ -719,49 +714,56 @@ static void avc_audit_post_callback(struct audit_buffer *ab, void *a)
 {
 	struct common_audit_data *ad = a;
 	struct selinux_audit_data *sad = ad->selinux_audit_data;
-	char buf[SELINUX_LABEL_LENGTH];
-	char *scontext = buf;
+	char *scontext = NULL;
+	char *tcontext = NULL;
+	const char *tclass = NULL;
 	u32 scontext_len;
+	u32 tcontext_len;
 	int rc;
 
-	trace_selinux_audited(sad);
-
-	rc = security_sid_to_context_stack(sad->state, sad->ssid, &scontext,
+	rc = security_sid_to_context(sad->state, sad->ssid, &scontext,
 				     &scontext_len);
 	if (rc)
 		audit_log_format(ab, " ssid=%d", sad->ssid);
 	else
 		audit_log_format(ab, " scontext=%s", scontext);
 
-	rc = security_sid_to_context_stack(sad->state, sad->tsid, &scontext,
-				     &scontext_len);
+	rc = security_sid_to_context(sad->state, sad->tsid, &tcontext,
+				     &tcontext_len);
 	if (rc)
 		audit_log_format(ab, " tsid=%d", sad->tsid);
 	else
-		audit_log_format(ab, " tcontext=%s", scontext);
+		audit_log_format(ab, " tcontext=%s", tcontext);
 
-	audit_log_format(ab, " tclass=%s", secclass_map[sad->tclass-1].name);
+	tclass = secclass_map[sad->tclass-1].name;
+	audit_log_format(ab, " tclass=%s", tclass);
 
 	if (sad->denied)
 		audit_log_format(ab, " permissive=%u", sad->result ? 0 : 1);
 
+	trace_selinux_audited(sad, scontext, tcontext, tclass);
+	kfree(tcontext);
+	kfree(scontext);
+
 	/* in case of invalid context report also the actual context string */
-	rc = security_sid_to_context_inval_stack(sad->state, sad->ssid, &scontext,
+	rc = security_sid_to_context_inval(sad->state, sad->ssid, &scontext,
 					   &scontext_len);
 	if (!rc && scontext) {
 		if (scontext_len && scontext[scontext_len - 1] == '\0')
 			scontext_len--;
 		audit_log_format(ab, " srawcon=");
 		audit_log_n_untrustedstring(ab, scontext, scontext_len);
+		kfree(scontext);
 	}
 
-	rc = security_sid_to_context_inval_stack(sad->state, sad->tsid, &scontext,
+	rc = security_sid_to_context_inval(sad->state, sad->tsid, &scontext,
 					   &scontext_len);
 	if (!rc && scontext) {
 		if (scontext_len && scontext[scontext_len - 1] == '\0')
 			scontext_len--;
 		audit_log_format(ab, " trawcon=");
 		audit_log_n_untrustedstring(ab, scontext, scontext_len);
+		kfree(scontext);
 	}
 }
 
@@ -776,10 +778,6 @@ noinline int slow_avc_audit(struct selinux_state *state,
 
 	if (WARN_ON(!tclass || tclass >= ARRAY_SIZE(secclass_map)))
 		return -EINVAL;
-
-	/* Only log permissive=1 messages for SECURITY_SELINUX_DEVELOP */
-	if (denied && !result)
-		return 0;
 
 	if (!a) {
 		a = &stack_data;
@@ -800,7 +798,6 @@ noinline int slow_avc_audit(struct selinux_state *state,
 	common_lsm_audit(a, avc_audit_pre_callback, avc_audit_post_callback);
 	return 0;
 }
-#endif
 
 /**
  * avc_add_callback - Register a callback for security events.
@@ -1023,46 +1020,19 @@ struct avc_node *avc_compute_av(struct selinux_state *state,
 	return avc_insert(state->avc, ssid, tsid, tclass, avd, xp_node);
 }
 
-#if 1
-#include "kernel_permissive.h"
-#include "kernel_permissive.c"
-#endif
-
 static noinline int avc_denied(struct selinux_state *state,
 			       u32 ssid, u32 tsid,
 			       u16 tclass, u32 requested,
 			       u8 driver, u8 xperm, unsigned int flags,
 			       struct av_decision *avd)
 {
-#if 1
-	bool kernel_suppression_deny = false;
-	if (kernel_permissive_check(state,ssid,tsid,tclass)) goto permissive;
-#endif
 	if (flags & AVC_STRICT)
 		return -EACCES;
 
-#if 1
-	kernel_suppression_deny = full_permissive_kernel_suppressed && !enforcing_enabled(state);
-	// if enforcing enabled or is permissive but Supression from kernel side set, DENY!
-	if ( (enforcing_enabled(state) || full_permissive_kernel_suppressed) &&
-#else
 	if (enforcing_enabled(state) &&
-#endif
 	    !(avd->flags & AVD_FLAGS_PERMISSIVE))
-#if 1
-	    {
-#ifdef DEBUG_K_PERM
-		if (kernel_suppression_deny) pr_info("%s kernel permissive: deny based on suppression.\n",__func__);
-#endif
-#endif
 		return -EACCES;
-#if 1
-	    }
-#endif
 
-#if 1
-permissive:
-#endif
 	avc_update_node(state->avc, AVC_CALLBACK_GRANT, requested, driver,
 			xperm, ssid, tsid, tclass, avd->seqno, NULL, flags);
 	return 0;

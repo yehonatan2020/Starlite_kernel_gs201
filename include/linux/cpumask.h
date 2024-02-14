@@ -55,9 +55,6 @@ extern unsigned int nr_cpu_ids;
  *     cpu_present_mask - has bit 'cpu' set iff cpu is populated
  *     cpu_online_mask  - has bit 'cpu' set iff cpu available to scheduler
  *     cpu_active_mask  - has bit 'cpu' set iff cpu available to migration
- *     cpu_lp_mask      - has bit 'cpu' set iff cpu is part of little cluster
- *     cpu_perf_mask    - has bit 'cpu' set iff cpu is part of big cluster
- *     cpu_prime_mask   - has bit 'cpu' set iff cpu is part of prime cluster
  *
  *  If !CONFIG_HOTPLUG_CPU, present == possible, and active == online.
  *
@@ -94,9 +91,6 @@ extern struct cpumask __cpu_possible_mask;
 extern struct cpumask __cpu_online_mask;
 extern struct cpumask __cpu_present_mask;
 extern struct cpumask __cpu_active_mask;
-extern const struct cpumask *const cpu_lp_mask;
-extern const struct cpumask *const cpu_perf_mask;
-extern const struct cpumask *const cpu_prime_mask;
 #define cpu_possible_mask ((const struct cpumask *)&__cpu_possible_mask)
 #define cpu_online_mask   ((const struct cpumask *)&__cpu_online_mask)
 #define cpu_present_mask  ((const struct cpumask *)&__cpu_present_mask)
@@ -236,7 +230,7 @@ static inline unsigned int cpumask_last(const struct cpumask *srcp)
 	return find_last_bit(cpumask_bits(srcp), nr_cpumask_bits);
 }
 
-unsigned int __pure cpumask_next(int n, const struct cpumask *srcp);
+unsigned int cpumask_next(int n, const struct cpumask *srcp);
 
 /**
  * cpumask_next_zero - get the next unset cpu in a cpumask
@@ -253,8 +247,8 @@ static inline unsigned int cpumask_next_zero(int n, const struct cpumask *srcp)
 	return find_next_zero_bit(cpumask_bits(srcp), nr_cpumask_bits, n+1);
 }
 
-int __pure cpumask_next_and(int n, const struct cpumask *, const struct cpumask *);
-int __pure cpumask_any_but(const struct cpumask *mask, unsigned int cpu);
+int cpumask_next_and(int n, const struct cpumask *, const struct cpumask *);
+int cpumask_any_but(const struct cpumask *mask, unsigned int cpu);
 unsigned int cpumask_local_spread(unsigned int i, int node);
 int cpumask_any_and_distribute(const struct cpumask *src1p,
 			       const struct cpumask *src2p);
@@ -926,44 +920,6 @@ cpumap_print_to_pagebuf(bool list, char *buf, const struct cpumask *mask)
 {
 	return bitmap_print_to_pagebuf(list, buf, cpumask_bits(mask),
 				      nr_cpu_ids);
-}
-
-/**
- * cpumap_print_bitmask_to_buf  - copies the cpumask into the buffer as
- *	hex values of cpumask
- *
- * @buf: the buffer to copy into
- * @mask: the cpumask to copy
- * @off: in the string from which we are copying, we copy to @buf
- * @count: the maximum number of bytes to print
- *
- * The function prints the cpumask into the buffer as hex values of
- * cpumask; Typically used by bin_attribute to export cpumask bitmask
- * ABI.
- *
- * Returns the length of how many bytes have been copied.
- */
-static inline ssize_t
-cpumap_print_bitmask_to_buf(char *buf, const struct cpumask *mask,
-		loff_t off, size_t count)
-{
-	return bitmap_print_bitmask_to_buf(buf, cpumask_bits(mask),
-				   nr_cpu_ids, off, count);
-}
-
-/**
- * cpumap_print_list_to_buf  - copies the cpumask into the buffer as
- *	comma-separated list of cpus
- *
- * Everything is same with the above cpumap_print_bitmask_to_buf()
- * except the print format.
- */
-static inline ssize_t
-cpumap_print_list_to_buf(char *buf, const struct cpumask *mask,
-		loff_t off, size_t count)
-{
-	return bitmap_print_list_to_buf(buf, cpumask_bits(mask),
-				   nr_cpu_ids, off, count);
 }
 
 #if NR_CPUS <= BITS_PER_LONG
