@@ -78,15 +78,13 @@ struct selinux_policy_convert_data {
 static int context_struct_to_string(struct policydb *policydb,
 				    struct context *context,
 				    char **scontext,
-				    u32 *scontext_len,
-				    bool alloc);
+				    u32 *scontext_len);
 
 static int sidtab_entry_to_string(struct policydb *policydb,
 				  struct sidtab *sidtab,
 				  struct sidtab_entry *entry,
 				  char **scontext,
-				  u32 *scontext_len,
-				  bool alloc);
+				  u32 *scontext_len);
 
 static void context_struct_compute_av(struct policydb *policydb,
 				      struct context *scontext,
@@ -467,9 +465,8 @@ static void security_dump_masked_av(struct policydb *policydb,
 	struct class_datum *tclass_dat;
 	struct audit_buffer *ab;
 	char *tclass_name;
-	char s[SELINUX_LABEL_LENGTH], t[SELINUX_LABEL_LENGTH];
-	char *scontext_name = s;
-	char *tcontext_name = t;
+	char *scontext_name = NULL;
+	char *tcontext_name = NULL;
 	char *permission_names[32];
 	int index;
 	u32 length;
@@ -494,11 +491,11 @@ static void security_dump_masked_av(struct policydb *policydb,
 
 	/* get scontext/tcontext in text form */
 	if (context_struct_to_string(policydb, scontext,
-				     &scontext_name, &length, false) < 0)
+				     &scontext_name, &length) < 0)
 		goto out;
 
 	if (context_struct_to_string(policydb, tcontext,
-				     &tcontext_name, &length, false) < 0)
+				     &tcontext_name, &length) < 0)
 		goto out;
 
 	/* audit a message */
@@ -721,7 +718,7 @@ static void context_struct_compute_av(struct policydb *policydb,
 				 tclass, avd);
 }
 
-static int security_validtrans_handle_fail(struct selinux_policy *policy,
+static inline int security_validtrans_handle_fail(struct selinux_policy *policy,
 					struct sidtab_entry *oentry,
 					struct sidtab_entry *nentry,
 					struct sidtab_entry *tentry,
@@ -730,25 +727,23 @@ static int security_validtrans_handle_fail(struct selinux_policy *policy,
 #ifdef CONFIG_AUDIT
 	struct policydb *p = &policy->policydb;
 	struct sidtab *sidtab = policy->sidtab;
-	char obuf[SELINUX_LABEL_LENGTH],
-	     nbuf[SELINUX_LABEL_LENGTH],
-	     tbuf[SELINUX_LABEL_LENGTH];
-	char *o = obuf,
-	     *n = nbuf,
-	     *t = tbuf;
+	char *o = NULL, *n = NULL, *t = NULL;
 	u32 olen, nlen, tlen;
 
-	if (sidtab_entry_to_string(p, sidtab, oentry, &o, &olen, false))
+	if (sidtab_entry_to_string(p, sidtab, oentry, &o, &olen))
 		goto out;
-	if (sidtab_entry_to_string(p, sidtab, nentry, &n, &nlen, false))
+	if (sidtab_entry_to_string(p, sidtab, nentry, &n, &nlen))
 		goto out;
-	if (sidtab_entry_to_string(p, sidtab, tentry, &t, &tlen, false))
+	if (sidtab_entry_to_string(p, sidtab, tentry, &t, &tlen))
 		goto out;
 	audit_log(audit_context(), GFP_ATOMIC, AUDIT_SELINUX_ERR,
 		  "op=security_validate_transition seresult=denied"
 		  " oldcontext=%s newcontext=%s taskcontext=%s tclass=%s",
 		  o, n, t, sym_name(p, SYM_CLASSES, tclass-1));
 out:
+	kfree(o);
+	kfree(n);
+	kfree(t);
 #endif
 
 	if (!enforcing_enabled())
@@ -920,15 +915,14 @@ int security_bounded_transition(u32 old_sid, u32 new_sid)
 
 #ifdef CONFIG_AUDIT
 	if (rc) {
-		char old[SELINUX_LABEL_LENGTH];
-		char new[SELINUX_LABEL_LENGTH];
-		char *old_name = old, *new_name = new;
+		char *old_name = NULL;
+		char *new_name = NULL;
 		u32 length;
 
 		if (!sidtab_entry_to_string(policydb, sidtab, old_entry,
-					    &old_name, &length, false) &&
+					    &old_name, &length) &&
 		    !sidtab_entry_to_string(policydb, sidtab, new_entry,
-					    &new_name, &length, false)) {
+					    &new_name, &length)) {
 			audit_log(audit_context(),
 				  GFP_ATOMIC, AUDIT_SELINUX_ERR,
 				  "op=security_bounded_transition "
@@ -936,6 +930,8 @@ int security_bounded_transition(u32 old_sid, u32 new_sid)
 				  "oldcontext=%s newcontext=%s",
 				  old_name, new_name);
 		}
+		kfree(new_name);
+		kfree(old_name);
 	}
 #endif
 out:
@@ -1225,25 +1221,20 @@ allow:
  */
 static int context_struct_to_string(struct policydb *p,
 				    struct context *context,
-				    char **scontext, u32 *scontext_len,
-				    bool alloc)
+				    char **scontext, u32 *scontext_len)
 {
 	char *scontextp;
 
-	if (alloc && scontext)
+	if (scontext)
 		*scontext = NULL;
 	*scontext_len = 0;
 
 	if (context->len) {
 		*scontext_len = context->len;
-		if (alloc) {
-			if (scontext) {
-				*scontext = kstrdup(context->str, GFP_ATOMIC);
-				if (!(*scontext))
-					return -ENOMEM;
-			}
-		} else {
-			strcpy(*scontext, context->str);
+		if (scontext) {
+			*scontext = kstrdup(context->str, GFP_ATOMIC);
+			if (!(*scontext))
+				return -ENOMEM;
 		}
 		return 0;
 	}
@@ -1257,15 +1248,11 @@ static int context_struct_to_string(struct policydb *p,
 	if (!scontext)
 		return 0;
 
-	if (alloc) {
-		/* Allocate space for the context; caller must free this space. */
-		scontextp = kmalloc(*scontext_len, GFP_ATOMIC);
-		if (!scontextp)
-			return -ENOMEM;
-		*scontext = scontextp;
-	} else {
-		scontextp = *scontext;
-	}
+	/* Allocate space for the context; caller must free this space. */
+	scontextp = kmalloc(*scontext_len, GFP_ATOMIC);
+	if (!scontextp)
+		return -ENOMEM;
+	*scontext = scontextp;
 
 	/*
 	 * Copy the user name, role name and type name into the context.
@@ -1285,16 +1272,15 @@ static int context_struct_to_string(struct policydb *p,
 static int sidtab_entry_to_string(struct policydb *p,
 				  struct sidtab *sidtab,
 				  struct sidtab_entry *entry,
-				  char **scontext, u32 *scontext_len,
-				  bool alloc)
+				  char **scontext, u32 *scontext_len)
 {
-	int rc = sidtab_sid2str_get(sidtab, entry, scontext, scontext_len, alloc);
+	int rc = sidtab_sid2str_get(sidtab, entry, scontext, scontext_len);
 
 	if (rc != -ENOENT)
 		return rc;
 
 	rc = context_struct_to_string(p, &entry->context, scontext,
-				      scontext_len, alloc);
+				      scontext_len);
 	if (!rc && scontext)
 		sidtab_sid2str_put(sidtab, entry, *scontext, *scontext_len);
 	return rc;
@@ -1330,7 +1316,7 @@ const char *security_get_initial_sid_context(u32 sid)
 
 static int security_sid_to_context_core(u32 sid, char **scontext,
 					u32 *scontext_len, int force,
-					int only_invalid, bool alloc)
+					int only_invalid)
 {
 	struct selinux_policy *policy;
 	struct policydb *policydb;
@@ -1338,7 +1324,7 @@ static int security_sid_to_context_core(u32 sid, char **scontext,
 	struct sidtab_entry *entry;
 	int rc = 0;
 
-	if (alloc && scontext)
+	if (scontext)
 		*scontext = NULL;
 	*scontext_len  = 0;
 
@@ -1350,16 +1336,12 @@ static int security_sid_to_context_core(u32 sid, char **scontext,
 			if (!s)
 				return -EINVAL;
 			*scontext_len = strlen(s) + 1;
-			if (alloc) {
-				if (!scontext)
-					return 0;
-				scontextp = kmemdup(s, *scontext_len, GFP_ATOMIC);
-				if (!scontextp)
-					return -ENOMEM;
-				*scontext = scontextp;
-			} else {
-				strncpy(*scontext, s, *scontext_len);
-			}
+			if (!scontext)
+				return 0;
+			scontextp = kmemdup(s, *scontext_len, GFP_ATOMIC);
+			if (!scontextp)
+				return -ENOMEM;
+			*scontext = scontextp;
 			return 0;
 		}
 		pr_err("SELinux: %s:  called before initial "
@@ -1385,7 +1367,7 @@ static int security_sid_to_context_core(u32 sid, char **scontext,
 		goto out_unlock;
 
 	rc = sidtab_entry_to_string(policydb, sidtab, entry, scontext,
-				    scontext_len, alloc);
+				    scontext_len);
 
 out_unlock:
 	rcu_read_unlock();
@@ -1668,7 +1650,7 @@ int security_context_to_sid_force(const char *scontext, u32 scontext_len,
 					    sid, SECSID_NULL, GFP_KERNEL, 1);
 }
 
-static int compute_sid_handle_invalid_context(
+static inline int compute_sid_handle_invalid_context(
 	struct selinux_policy *policy,
 	struct sidtab_entry *sentry,
 	struct sidtab_entry *tentry,
@@ -1678,20 +1660,15 @@ static int compute_sid_handle_invalid_context(
 #ifdef CONFIG_AUDIT
 	struct policydb *policydb = &policy->policydb;
 	struct sidtab *sidtab = policy->sidtab;
-	char sbuf[SELINUX_LABEL_LENGTH],
-	     tbuf[SELINUX_LABEL_LENGTH],
-	     nbuf[SELINUX_LABEL_LENGTH];
-	char *s = sbuf,
-	     *t = tbuf,
-	     *n = nbuf;
+	char *s = NULL, *t = NULL, *n = NULL;
 	u32 slen, tlen, nlen;
 	struct audit_buffer *ab;
 
-	if (sidtab_entry_to_string(policydb, sidtab, sentry, &s, &slen, false))
+	if (sidtab_entry_to_string(policydb, sidtab, sentry, &s, &slen))
 		goto out;
-	if (sidtab_entry_to_string(policydb, sidtab, tentry, &t, &tlen, false))
+	if (sidtab_entry_to_string(policydb, sidtab, tentry, &t, &tlen))
 		goto out;
-	if (context_struct_to_string(policydb, newcontext, &n, &nlen, false))
+	if (context_struct_to_string(policydb, newcontext, &n, &nlen))
 		goto out;
 	ab = audit_log_start(audit_context(), GFP_ATOMIC, AUDIT_SELINUX_ERR);
 	if (!ab)
@@ -1707,6 +1684,8 @@ out:
 	kfree(s);
 	kfree(t);
 	kfree(n);
+#endif
+
 	if (!enforcing_enabled())
 		return 0;
 	return -EACCES;
@@ -2012,8 +1991,7 @@ static inline int convert_context_handle_invalid_context(
 	struct context *context)
 {
 #ifdef CONFIG_AUDIT
-	char buf[SELINUX_LABEL_LENGTH];
-	char *s = buf;
+	char *s;
 	u32 len;
 #endif
 
@@ -2021,9 +1999,10 @@ static inline int convert_context_handle_invalid_context(
 		return -EINVAL;
 
 #ifdef CONFIG_AUDIT
-	if (!context_struct_to_string(policydb, context, &s, &len, false)) {
+	if (!context_struct_to_string(policydb, context, &s, &len)) {
 		pr_warn("SELinux:  Context %s would be invalid if enforcing\n",
 			s);
+		kfree(s);
 	}
 #endif
 	return 0;
@@ -2146,7 +2125,7 @@ int services_convert_context(struct convert_context_args *args,
 bad:
 #ifdef CONFIG_AUDIT
 	/* Map old representation to string and save it. */
-	rc = context_struct_to_string(args->oldp, oldc, &s, &len, true);
+	rc = context_struct_to_string(args->oldp, oldc, &s, &len);
 	if (rc)
 		return rc;
 	context_destroy(newc);
@@ -3217,6 +3196,7 @@ int security_sid_mls_copy(u32 sid, u32 mls_sid, u32 *new_sid)
 	struct context newcon;
 	int rc;
 #ifdef CONFIG_AUDIT
+	char *s;
 	u32 len;
 #endif
 
@@ -3268,10 +3248,8 @@ retry:
 							&newcon);
 		if (rc) {
 #ifdef CONFIG_AUDIT
-			char buf[SELINUX_LABEL_LENGTH];
-			char *s = buf;
 			if (!context_struct_to_string(policydb, &newcon, &s,
-						      &len, false)) {
+						      &len)) {
 				struct audit_buffer *ab;
 
 				ab = audit_log_start(audit_context(),
@@ -3282,6 +3260,7 @@ retry:
 				/* don't record NUL with untrusted strings */
 				audit_log_n_untrustedstring(ab, s, len - 1);
 				audit_log_end(ab);
+				kfree(s);
 			}
 #endif
 			goto out_unlock;
