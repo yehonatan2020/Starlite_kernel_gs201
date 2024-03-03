@@ -708,24 +708,29 @@ static void avc_audit_post_callback(struct audit_buffer *ab, void *a)
 {
 	struct common_audit_data *ad = a;
 	struct selinux_audit_data *sad = ad->selinux_audit_data;
-	char buf[SELINUX_LABEL_LENGTH];
-	char *scontext = buf;
+	char *scontext;
 	u32 scontext_len;
 	int rc;
+
+	trace_selinux_audited(sad);
 
 	rc = security_sid_to_context(sad->ssid, &scontext,
 				     &scontext_len);
 	if (rc)
 		audit_log_format(ab, " ssid=%d", sad->ssid);
-	else
+	else {
 		audit_log_format(ab, " scontext=%s", scontext);
+		kfree(scontext);
+	}
 
-	rc = security_sid_to_context(sad->tsid, &tcontext,
-				     &tcontext_len);
+	rc = security_sid_to_context(sad->tsid, &scontext,
+				     &scontext_len);
 	if (rc)
 		audit_log_format(ab, " tsid=%d", sad->tsid);
-	else
+	else {
 		audit_log_format(ab, " tcontext=%s", scontext);
+		kfree(scontext);
+	}
 
 	audit_log_format(ab, " tclass=%s", secclass_map[sad->tclass-1].name);
 
@@ -740,6 +745,7 @@ static void avc_audit_post_callback(struct audit_buffer *ab, void *a)
 			scontext_len--;
 		audit_log_format(ab, " srawcon=");
 		audit_log_n_untrustedstring(ab, scontext, scontext_len);
+		kfree(scontext);
 	}
 
 	rc = security_sid_to_context_inval(sad->tsid, &scontext,
@@ -749,6 +755,7 @@ static void avc_audit_post_callback(struct audit_buffer *ab, void *a)
 			scontext_len--;
 		audit_log_format(ab, " trawcon=");
 		audit_log_n_untrustedstring(ab, scontext, scontext_len);
+		kfree(scontext);
 	}
 }
 
@@ -766,10 +773,6 @@ noinline int slow_avc_audit(u32 ssid, u32 tsid, u16 tclass,
 
 	if (WARN_ON(!tclass || tclass >= ARRAY_SIZE(secclass_map)))
 		return -EINVAL;
-
-	/* Only log permissive=1 messages for SECURITY_SELINUX_DEVELOP */
-	if (denied && !result)
-		return 0;
 
 	if (!a) {
 		a = &stack_data;
@@ -1005,25 +1008,12 @@ static noinline int avc_denied(u32 ssid, u32 tsid,
 			       u8 driver, u8 xperm, unsigned int flags,
 			       struct av_decision *avd)
 {
-#if 1
-	bool kernel_suppression_deny = false;
-	if (kernel_permissive_check(state,ssid,tsid,tclass)) goto permissive;
-#endif
 	if (flags & AVC_STRICT)
 		return -EACCES;
 
 	if (enforcing_enabled() &&
 	    !(avd->flags & AVD_FLAGS_PERMISSIVE))
-#if 1
-	    {
-#ifdef DEBUG_K_PERM
-		if (kernel_suppression_deny) pr_info("%s kernel permissive: deny based on suppression.\n",__func__);
-#endif
-#endif
 		return -EACCES;
-#if 1
-	    }
-#endif
 
 	avc_update_node(AVC_CALLBACK_GRANT, requested, driver,
 			xperm, ssid, tsid, tclass, avd->seqno, NULL, flags);
