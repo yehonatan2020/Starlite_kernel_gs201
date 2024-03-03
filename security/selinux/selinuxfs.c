@@ -97,7 +97,7 @@ static int selinux_fs_info_create(struct super_block *sb)
 static void selinux_fs_info_free(struct super_block *sb)
 {
 	struct selinux_fs_info *fsi = sb->s_fs_info;
-	int i;
+	unsigned int i;
 
 	if (fsi) {
 		for (i = 0; i < fsi->bool_num; i++)
@@ -642,14 +642,7 @@ static const struct file_operations sel_load_ops = {
 
 static ssize_t sel_write_context(struct file *file, char *buf, size_t size)
 {
-<<<<<<< HEAD
-	struct selinux_fs_info *fsi = file_inode(file)->i_sb->s_fs_info;
-	struct selinux_state *state = fsi->state;
-	char *canon;
-	char canon_buf[SELINUX_LABEL_LENGTH];
-=======
 	char *canon = NULL;
->>>>>>> 844e82acde5f (selinux: stop passing selinux_state pointers and their offspring)
 	u32 sid, len;
 	ssize_t length;
 
@@ -676,6 +669,7 @@ static ssize_t sel_write_context(struct file *file, char *buf, size_t size)
 	memcpy(buf, canon, len);
 	length = len;
 out:
+	kfree(canon);
 	return length;
 }
 
@@ -923,8 +917,7 @@ static ssize_t sel_write_create(struct file *file, char *buf, size_t size)
 	u32 ssid, tsid, newsid;
 	u16 tclass;
 	ssize_t length;
-	char *newcon;
-	char newcon_buf[SELINUX_LABEL_LENGTH];
+	char *newcon = NULL;
 	u32 len;
 	int nargs;
 
@@ -1011,6 +1004,7 @@ static ssize_t sel_write_create(struct file *file, char *buf, size_t size)
 	memcpy(buf, newcon, len);
 	length = len;
 out:
+	kfree(newcon);
 	kfree(namebuf);
 	kfree(tcon);
 	kfree(scon);
@@ -1023,8 +1017,7 @@ static ssize_t sel_write_relabel(struct file *file, char *buf, size_t size)
 	u32 ssid, tsid, newsid;
 	u16 tclass;
 	ssize_t length;
-	char *newcon;
-	char newcon_buf[SELINUX_LABEL_LENGTH];
+	char *newcon = NULL;
 	u32 len;
 
 	length = avc_has_perm(current_sid(), SECINITSID_SECURITY,
@@ -1070,6 +1063,7 @@ static ssize_t sel_write_relabel(struct file *file, char *buf, size_t size)
 	memcpy(buf, newcon, len);
 	length = len;
 out:
+	kfree(newcon);
 	kfree(tcon);
 	kfree(scon);
 	return length;
@@ -1081,9 +1075,8 @@ static ssize_t sel_write_user(struct file *file, char *buf, size_t size)
 	u32 sid, *sids = NULL;
 	ssize_t length;
 	char *newcon;
-	char newcon_buf[SELINUX_LABEL_LENGTH];
-	int i, rc;
-	u32 len, nsids;
+	int rc;
+	u32 i, len, nsids;
 
 	length = avc_has_perm(current_sid(), SECINITSID_SECURITY,
 			      SECCLASS_SECURITY, SECURITY__COMPUTE_USER,
@@ -1115,7 +1108,6 @@ static ssize_t sel_write_user(struct file *file, char *buf, size_t size)
 
 	length = sprintf(buf, "%u", nsids) + 1;
 	ptr = buf + length;
-	newcon = newcon_buf;
 	for (i = 0; i < nsids; i++) {
 		rc = security_sid_to_context(sids[i], &newcon, &len);
 		if (rc) {
@@ -1123,10 +1115,12 @@ static ssize_t sel_write_user(struct file *file, char *buf, size_t size)
 			goto out;
 		}
 		if ((length + len) >= SIMPLE_TRANSACTION_LIMIT) {
+			kfree(newcon);
 			length = -ERANGE;
 			goto out;
 		}
 		memcpy(ptr, newcon, len);
+		kfree(newcon);
 		ptr += len;
 		length += len;
 	}
@@ -1143,8 +1137,7 @@ static ssize_t sel_write_member(struct file *file, char *buf, size_t size)
 	u32 ssid, tsid, newsid;
 	u16 tclass;
 	ssize_t length;
-	char *newcon;
-	char newcon_buf[SELINUX_LABEL_LENGTH];
+	char *newcon = NULL;
 	u32 len;
 
 	length = avc_has_perm(current_sid(), SECINITSID_SECURITY,
@@ -1193,12 +1186,13 @@ static ssize_t sel_write_member(struct file *file, char *buf, size_t size)
 	memcpy(buf, newcon, len);
 	length = len;
 out:
+	kfree(newcon);
 	kfree(tcon);
 	kfree(scon);
 	return length;
 }
 
-static struct inode *sel_make_inode(struct super_block *sb, int mode)
+static struct inode *sel_make_inode(struct super_block *sb, umode_t mode)
 {
 	struct inode *ret = new_inode(sb);
 
@@ -1619,7 +1613,7 @@ static int sel_make_avc_files(struct dentry *dir)
 {
 	struct super_block *sb = dir->d_sb;
 	struct selinux_fs_info *fsi = sb->s_fs_info;
-	int i;
+	unsigned int i;
 	static const struct tree_descr files[] = {
 		{ "cache_threshold",
 		  &sel_avc_cache_threshold_ops, S_IRUGO|S_IWUSR },
@@ -1655,7 +1649,7 @@ static int sel_make_ss_files(struct dentry *dir)
 {
 	struct super_block *sb = dir->d_sb;
 	struct selinux_fs_info *fsi = sb->s_fs_info;
-	int i;
+	unsigned int i;
 	static const struct tree_descr files[] = {
 		{ "sidtab_hash_stats", &sel_sidtab_hash_stats_ops, S_IRUGO },
 	};
@@ -1686,7 +1680,6 @@ static ssize_t sel_read_initcon(struct file *file, char __user *buf,
 				size_t count, loff_t *ppos)
 {
 	char *con;
-	char con_buf[SELINUX_LABEL_LENGTH];
 	u32 sid, len;
 	ssize_t ret;
 
@@ -1696,6 +1689,7 @@ static ssize_t sel_read_initcon(struct file *file, char __user *buf,
 		return ret;
 
 	ret = simple_read_from_buffer(buf, count, ppos, con, len);
+	kfree(con);
 	return ret;
 }
 
@@ -1706,7 +1700,7 @@ static const struct file_operations sel_initcon_ops = {
 
 static int sel_make_initcon_files(struct dentry *dir)
 {
-	int i;
+	unsigned int i;
 
 	for (i = 1; i <= SECINITSID_NUM; i++) {
 		struct inode *inode;
